@@ -24,12 +24,14 @@ class Hexagon {
         this.diameter = diameter;
         this.past = [];
         this.isHighlighted = false;
+        this.highlightColor = [255, 255, 0, 100]; // Default highlight color
     }
 
     render() {
         push();
         if (this.isHighlighted) {
-            fill(255, 255, 0, 100);
+            fill(this.highlightColor[0], this.highlightColor[1], 
+                 this.highlightColor[2], this.highlightColor[3]);
         } else {
             fill(this.color[0], this.color[1], this.color[2], this.intensity);
         }
@@ -46,15 +48,6 @@ class Hexagon {
         }
         endShape(CLOSE);
         pop();
-    }
-
-    update(color, interaction) {
-        this.color = color;
-        this.past.push(interaction);
-        console.log(`Hexagon at (${this.position.x}, ${this.position.y}) updated:`, {
-            color: this.color,
-            interaction: interaction
-        });
     }
 }
 
@@ -167,7 +160,127 @@ class Grid {
         this.init();
         this.initDualGraph();
     }
-}
+        // Check if two hexagons are neighbors in the dual graph
+        areNeighbors(pos1, pos2) {
+            const [i1, j1] = pos1;
+            const [i2, j2] = pos2;
+            const key1 = `${i1},${j1}`;
+            const key2 = `${i2},${j2}`;
+            const neighbors = this.dualGraph[key1];
+            return neighbors.includes(key2);
+        }
+
+        countConnectionsInSequence(position) {
+            const [i, j] = position;
+            let connections = 0;
+            
+            // Count how many other hexagons in the sequence are neighbors of this one
+            selectedHexagons.forEach(otherPos => {
+                if (otherPos[0] !== i || otherPos[1] !== j) { // Don't count self
+                    if (this.areNeighbors(position, otherPos)) {
+                        connections++;
+                    }
+                }
+            });
+            
+            return connections;
+        }
+    
+        // Modified checkCycle method with degree validation
+        checkCycle() {
+            if (selectedHexagons.length < 4) {
+                console.log("Sequence too short to form a cycle");
+                return false;
+            }
+    
+            // First check if all consecutive hexagons are neighbors
+            for (let i = 0; i < selectedHexagons.length - 1; i++) {
+                const current = selectedHexagons[i];
+                const next = selectedHexagons[i + 1];
+                if (!this.areNeighbors(current, next)) {
+                    console.log(`Break in cycle: ${current} and ${next} are not neighbors`);
+                    return false;
+                }
+            }
+    
+            // Check if last and first hexagons are neighbors to close the cycle
+            const first = selectedHexagons[0];
+            const last = selectedHexagons[selectedHexagons.length - 1];
+            if (!this.areNeighbors(last, first)) {
+                console.log(`Cycle not closed: ${last} and ${first} are not neighbors`);
+                return false;
+            }
+    
+            // Check degree condition for each hexagon in the sequence
+            for (let pos of selectedHexagons) {
+                const degree = this.countConnectionsInSequence(pos);
+                if (degree !== 2) {
+                    console.log(`Invalid degree at position ${pos}: degree = ${degree}, expected 2`);
+                    return false;
+                }
+            }
+    
+            console.log("Valid cycle found with all degrees = 2!", selectedHexagons);
+            return true;
+        }
+    
+        // Modified highlightSelection to show degree violations
+        highlightSelection() {
+            // Clear any existing highlights
+            this.clearHighlights();
+            
+            // Calculate degrees for visual feedback
+            const degrees = new Map(
+                selectedHexagons.map(pos => [
+                    `${pos[0]},${pos[1]}`, 
+                    this.countConnectionsInSequence(pos)
+                ])
+            );
+            
+            // Highlight selected hexagons
+            selectedHexagons.forEach(([i, j], index) => {
+                const hexagon = this.hexagons[`${i},${j}`];
+                if (hexagon) {
+                    // Color based on degree
+                    const degree = degrees.get(`${i},${j}`);
+                    if (degree > 2) {
+                        hexagon.isHighlighted = true;
+                        hexagon.highlightColor = [255, 0, 0, 100]; // Red for too many connections
+                    } else if (degree < 2) {
+                        hexagon.isHighlighted = true;
+                        hexagon.highlightColor = [255, 165, 0, 100]; // Orange for too few connections
+                    } else {
+                        hexagon.isHighlighted = true;
+                        hexagon.highlightColor = [255, 255, 0, 100]; // Yellow for correct degree
+                    }
+                    
+                    // Draw connection lines between consecutive hexagons
+                    if (index < selectedHexagons.length - 1) {
+                        const nextHex = this.hexagons[`${selectedHexagons[index + 1][0]},${selectedHexagons[index + 1][1]}`];
+                        push();
+                        stroke(0, 0, 255);
+                        strokeWeight(2);
+                        line(hexagon.position.x, hexagon.position.y, 
+                             nextHex.position.x, nextHex.position.y);
+                        pop();
+                    }
+                    
+                    // If last hexagon and potentially valid cycle, draw closing line
+                    if (index === selectedHexagons.length - 1 && 
+                        this.areNeighbors(selectedHexagons[0], selectedHexagons[selectedHexagons.length - 1])) {
+                        const firstHex = this.hexagons[`${selectedHexagons[0][0]},${selectedHexagons[0][1]}`];
+                        push();
+                        stroke(0, 0, 255);
+                        strokeWeight(2);
+                        line(hexagon.position.x, hexagon.position.y, 
+                             firstHex.position.x, firstHex.position.y);
+                        pop();
+                    }
+                }
+            });
+        }
+    }
+    
 
 let grid;
 
@@ -179,6 +292,11 @@ function setup() {
 function draw() {
     background(255);
     grid.render();
+    
+    // Draw selection lines on top
+    if (selectedHexagons.length > 0) {
+        grid.highlightSelection();
+    }
 }
 
 function windowResized() {
@@ -187,12 +305,43 @@ function windowResized() {
 }
 
 function mousePressed() {
-    if (!showNeighbors) return;
+    isSelecting = true;
+    selectedHexagons = []; // Clear previous selection
     
     const clicked = grid.getHexagonAtPoint(mouseX, mouseY);
     if (clicked) {
-        const [i, j] = clicked;
-        grid.highlightNeighbors(i, j);
+        selectedHexagons.push(clicked);
+        grid.highlightSelection();
+    }
+}
+function mouseDragged() {
+    if (!isSelecting) return;
+    
+    const current = grid.getHexagonAtPoint(mouseX, mouseY);
+    if (current) {
+        // Only add if it's different from the last selected hexagon
+        const lastSelected = selectedHexagons[selectedHexagons.length - 1];
+        if (!lastSelected || 
+            current[0] !== lastSelected[0] || 
+            current[1] !== lastSelected[1]) {
+            selectedHexagons.push(current);
+            grid.highlightSelection();
+        }
+    }
+}
+
+function mouseReleased() {
+    if (isSelecting) {
+        isSelecting = false;
+        const isCycle = grid.checkCycle();
+        console.log(`Selection complete, is valid cycle: ${isCycle}`);
+        if (!isCycle) {
+            // Clear selection after a short delay
+            setTimeout(() => {
+                selectedHexagons = [];
+                grid.clearHighlights();
+            }, 1000);
+        }
     }
 }
 
