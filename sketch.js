@@ -9,7 +9,13 @@ const SELECTION_SENSITIVITY = 0.8; // 1.0 means full radius, smaller values make
 const DEFAULT_DECAY_RATE = 0.1;  // Normal decay rate (amount of color lost per frame)
 let CURRENT_DECAY_RATE = DEFAULT_DECAY_RATE;  // Current decay rate that can be modified for debugging
 let DEBUG_DECAY_RATE = 1.0;  // Faster decay rate for debugging (10x faster)
-
+// Echo-related constants
+const DEFAULT_ECHO_PERIOD = 20000;  // 20 seconds between echoes
+const DEFAULT_ECHO_DECAY = 0.8;    // Each echo is 80% as intense as the previous
+let CURRENT_ECHO_PERIOD = DEFAULT_ECHO_PERIOD;
+let CURRENT_ECHO_DECAY = DEFAULT_ECHO_DECAY;
+let DEBUG_ECHO_PERIOD = 500;      // Faster echoes for debugging
+let DEBUG_ECHO_DECAY = 0.5;       // Faster intensity decay for debugging
 
 
 
@@ -31,40 +37,82 @@ class Hexagon {
         this.highlightColor = [255, 255, 0, 100];
         this.eventHistory = [];
         this.isDecaying = false;
-        this.originalColor = [...color];  // Store the original color for decay calculation
-    }
-
-    recordCycleEvent(colorIndex) {
-        const timestamp = new Date().toISOString();
-        this.eventHistory.push([timestamp, colorIndex]);
-        console.log(`Hexagon at (${this.position.x}, ${this.position.y}) - New cycle event:`, 
-                    `Timestamp: ${timestamp}`, 
-                    `Color Index: ${colorIndex}`,
-                    `Total events: ${this.eventHistory.length}`);
+        this.originalColor = [...color];
+        this.echoTimers = [];  // Store echo timers for this hexagon
+        this.lastEchoTime = 0; // Track when the last echo occurred
     }
 
     startDecay() {
         this.isDecaying = true;
         this.intensity = 255;
-        this.originalColor = [...this.color];  // Store the color to decay from
+        this.originalColor = [...this.color];
+        this.lastEchoTime = Date.now();
+    }
+
+    recordCycleEvent(colorIndex, cycleId) {
+        const timestamp = Date.now(); // Use numeric timestamp for easier calculations
+        const event = {
+            timestamp: timestamp,
+            colorIndex: colorIndex,
+            cycleId: cycleId,
+            originalIntensity: 255
+        };
+        this.eventHistory.push(event);
+        this.setupEcho(event);
+        
+        console.log(`Hexagon at (${this.position.x}, ${this.position.y}) - New cycle event:`, 
+                    `Timestamp: ${new Date(timestamp).toISOString()}`, 
+                    `Color Index: ${colorIndex}`,
+                    `Cycle ID: ${cycleId}`);
+    }
+
+    setupEcho(event) {
+        const startEcho = () => {
+            const age = Date.now() - event.timestamp;
+            const echoCount = Math.floor(age / CURRENT_ECHO_PERIOD);
+            const intensity = 255 * Math.pow(CURRENT_ECHO_DECAY, echoCount);
+            
+            // Only echo if intensity is still visible
+            if (intensity > 1) {
+                this.triggerEcho(event.colorIndex, intensity);
+                setTimeout(startEcho, CURRENT_ECHO_PERIOD);
+            }
+        };
+
+        // Start the echo cycle
+        setTimeout(startEcho, CURRENT_ECHO_PERIOD);
+    }
+
+    triggerEcho(colorIndex, intensity) {
+        // Only trigger echo if not already in a more intense state
+        if (!this.isDecaying || this.intensity < intensity) {
+            this.color = [...COLOR_PALETTE[colorIndex]];
+            this.intensity = intensity;
+            this.isDecaying = true;
+            this.lastEchoTime = Date.now();
+        }
     }
 
     updateDecay() {
         if (this.isDecaying) {
             let stillDecaying = false;
             
-            // Update each color component
-            for (let i = 0; i < 3; i++) {
-                if (this.color[i] > 0) {
-                    this.color[i] = Math.max(0, this.color[i] - CURRENT_DECAY_RATE);
-                    stillDecaying = true;
-                }
-            }
+            // Calculate time since last echo
+            const timeSinceEcho = Date.now() - this.lastEchoTime;
             
-            // Stop decaying when all components reach 0
-            if (!stillDecaying) {
-                this.isDecaying = false;
-                this.color = [0, 0, 0];
+            // Only decay after a short delay to show the echo
+            if (timeSinceEcho > 100) {  // 100ms delay before starting decay
+                for (let i = 0; i < 3; i++) {
+                    if (this.color[i] > 0) {
+                        this.color[i] = Math.max(0, this.color[i] - CURRENT_DECAY_RATE);
+                        stillDecaying = true;
+                    }
+                }
+                
+                if (!stillDecaying) {
+                    this.isDecaying = false;
+                    this.color = [0, 0, 0];
+                }
             }
         }
     }
@@ -99,6 +147,7 @@ class Grid {
     constructor() {
         this.hexagons = {};
         this.dualGraph = {};
+        this.cycleCounter = 0;  // Add a counter to generate unique cycle IDs
         this.init();
         this.initDualGraph();
     }
@@ -219,27 +268,25 @@ class Grid {
     }
 
     colorCycle() {
+        this.cycleCounter++;  // Increment counter for new cycle
+        const cycleId = this.cycleCounter;
+        
         selectedHexagons.forEach(([i, j]) => {
             const hex = this.hexagons[`${i},${j}`];
-            let currentColorIndex = -1;
-            
-            // Find current color in palette
-            currentColorIndex = COLOR_PALETTE.findIndex(color => 
+            let currentColorIndex = COLOR_PALETTE.findIndex(color => 
                 color[0] === hex.color[0] && 
                 color[1] === hex.color[1] && 
                 color[2] === hex.color[2]
             );
             
             const nextColorIndex = (currentColorIndex + 1) % COLOR_PALETTE.length;
-            hex.color = [...COLOR_PALETTE[nextColorIndex]];  // Create a copy of the color
+            hex.color = [...COLOR_PALETTE[nextColorIndex]];
             hex.intensity = 255;
             hex.isHighlighted = false;
             
-            // Start decay process for the newly colored hexagon
+            // Start decay and record event with cycle ID
             hex.startDecay();
-            
-            // Record the cycle event
-            hex.recordCycleEvent(nextColorIndex);
+            hex.recordCycleEvent(nextColorIndex, cycleId);
         });
     }
 
@@ -398,10 +445,10 @@ function mouseReleased() {
     }
 }
 
-// Add key press handler for toggling debug decay rate
+// Update key press handler
 function keyPressed() {
     if (key === 'd' || key === 'D') {
-        toggleDebugDecay();
+        toggleDebugMode();
     }
 }
 
@@ -410,14 +457,19 @@ function windowResized() {
     grid.resize();
 }
 
-// Function to toggle between normal and debug decay rates
-function toggleDebugDecay() {
+
+// Function to toggle debug mode for both decay and echo
+function toggleDebugMode() {
     if (CURRENT_DECAY_RATE === DEFAULT_DECAY_RATE) {
         CURRENT_DECAY_RATE = DEBUG_DECAY_RATE;
-        console.log("Debug decay rate activated:", DEBUG_DECAY_RATE);
+        CURRENT_ECHO_PERIOD = DEBUG_ECHO_PERIOD;
+        CURRENT_ECHO_DECAY = DEBUG_ECHO_DECAY;
+        console.log("Debug mode activated");
     } else {
         CURRENT_DECAY_RATE = DEFAULT_DECAY_RATE;
-        console.log("Normal decay rate restored:", DEFAULT_DECAY_RATE);
+        CURRENT_ECHO_PERIOD = DEFAULT_ECHO_PERIOD;
+        CURRENT_ECHO_DECAY = DEFAULT_ECHO_DECAY;
+        console.log("Normal mode restored");
     }
 }
 
