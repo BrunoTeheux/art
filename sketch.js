@@ -6,6 +6,11 @@ let highlightedHexagons = [];
 let selectedHexagons = []; 
 let isSelecting = false;   
 const SELECTION_SENSITIVITY = 0.8; // 1.0 means full radius, smaller values make selection more strict
+const DEFAULT_DECAY_RATE = 0.1;  // Normal decay rate (amount of color lost per frame)
+let CURRENT_DECAY_RATE = DEFAULT_DECAY_RATE;  // Current decay rate that can be modified for debugging
+let DEBUG_DECAY_RATE = 1.0;  // Faster decay rate for debugging (10x faster)
+
+
 
 
 // Color palette
@@ -17,16 +22,56 @@ const COLOR_PALETTE = [
 ];
 
 class Hexagon {
-    constructor(x, y, diameter, color = [128, 128, 128]) {
+    constructor(x, y, diameter, color = [0, 0, 0]) {
         this.position = { x, y };
         this.color = color;
-        this.intensity = 50;
+        this.intensity = 255;
         this.diameter = diameter;
         this.isHighlighted = false;
         this.highlightColor = [255, 255, 0, 100];
+        this.eventHistory = [];
+        this.isDecaying = false;
+        this.originalColor = [...color];  // Store the original color for decay calculation
+    }
+
+    recordCycleEvent(colorIndex) {
+        const timestamp = new Date().toISOString();
+        this.eventHistory.push([timestamp, colorIndex]);
+        console.log(`Hexagon at (${this.position.x}, ${this.position.y}) - New cycle event:`, 
+                    `Timestamp: ${timestamp}`, 
+                    `Color Index: ${colorIndex}`,
+                    `Total events: ${this.eventHistory.length}`);
+    }
+
+    startDecay() {
+        this.isDecaying = true;
+        this.intensity = 255;
+        this.originalColor = [...this.color];  // Store the color to decay from
+    }
+
+    updateDecay() {
+        if (this.isDecaying) {
+            let stillDecaying = false;
+            
+            // Update each color component
+            for (let i = 0; i < 3; i++) {
+                if (this.color[i] > 0) {
+                    this.color[i] = Math.max(0, this.color[i] - CURRENT_DECAY_RATE);
+                    stillDecaying = true;
+                }
+            }
+            
+            // Stop decaying when all components reach 0
+            if (!stillDecaying) {
+                this.isDecaying = false;
+                this.color = [0, 0, 0];
+            }
+        }
     }
 
     render() {
+        this.updateDecay();
+
         push();
         if (this.isHighlighted) {
             fill(this.highlightColor[0], this.highlightColor[1], 
@@ -34,7 +79,7 @@ class Hexagon {
         } else {
             fill(this.color[0], this.color[1], this.color[2], this.intensity);
         }
-        stroke(0);
+        stroke(255);
         strokeWeight(1);
         translate(this.position.x, this.position.y);
         
@@ -177,19 +222,27 @@ class Grid {
         selectedHexagons.forEach(([i, j]) => {
             const hex = this.hexagons[`${i},${j}`];
             let currentColorIndex = -1;
-            if (hex.intensity === 255) {
-                currentColorIndex = COLOR_PALETTE.findIndex(color => 
-                    color[0] === hex.color[0] && 
-                    color[1] === hex.color[1] && 
-                    color[2] === hex.color[2]
-                );
-            }
+            
+            // Find current color in palette
+            currentColorIndex = COLOR_PALETTE.findIndex(color => 
+                color[0] === hex.color[0] && 
+                color[1] === hex.color[1] && 
+                color[2] === hex.color[2]
+            );
+            
             const nextColorIndex = (currentColorIndex + 1) % COLOR_PALETTE.length;
-            hex.color = COLOR_PALETTE[nextColorIndex];
+            hex.color = [...COLOR_PALETTE[nextColorIndex]];  // Create a copy of the color
             hex.intensity = 255;
             hex.isHighlighted = false;
+            
+            // Start decay process for the newly colored hexagon
+            hex.startDecay();
+            
+            // Record the cycle event
+            hex.recordCycleEvent(nextColorIndex);
         });
     }
+
 
     handleCycleValidation() {
         console.log("Handling cycle validation");  // Debug log
@@ -303,7 +356,8 @@ function setup() {
 }
 
 function draw() {
-    background(255);
+    // Using RGB values for dark grey (40, 40, 40)
+    background(40);  // Changed from background(255) to background(40)
     grid.render();
     
     if (selectedHexagons.length > 0) {
@@ -320,7 +374,7 @@ function mousePressed() {
         selectedHexagons.push(clicked);
         grid.highlightSelection();
     }
-}
+}w
 
 function mouseDragged() {
     if (!isSelecting) return;
@@ -344,7 +398,26 @@ function mouseReleased() {
     }
 }
 
+// Add key press handler for toggling debug decay rate
+function keyPressed() {
+    if (key === 'd' || key === 'D') {
+        toggleDebugDecay();
+    }
+}
+
 function windowResized() {
     resizeCanvas(windowWidth, windowHeight);
     grid.resize();
 }
+
+// Function to toggle between normal and debug decay rates
+function toggleDebugDecay() {
+    if (CURRENT_DECAY_RATE === DEFAULT_DECAY_RATE) {
+        CURRENT_DECAY_RATE = DEBUG_DECAY_RATE;
+        console.log("Debug decay rate activated:", DEBUG_DECAY_RATE);
+    } else {
+        CURRENT_DECAY_RATE = DEFAULT_DECAY_RATE;
+        console.log("Normal decay rate restored:", DEFAULT_DECAY_RATE);
+    }
+}
+
