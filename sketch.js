@@ -38,8 +38,14 @@ class Hexagon {
         this.eventHistory = [];
         this.isDecaying = false;
         this.originalColor = [...color];
-        this.echoTimers = [];  // Store echo timers for this hexagon
-        this.lastEchoTime = 0; // Track when the last echo occurred
+        this.echoTimers = [];
+        this.lastEchoTime = 0;
+        
+        // Properties for smooth echo transition
+        this.targetIntensity = 0;
+        this.transitionStartTime = 0;
+        this.isTransitioning = false;
+        this.ECHO_TRANSITION_DURATION = 300;
     }
 
     startDecay() {
@@ -47,10 +53,11 @@ class Hexagon {
         this.intensity = 255;
         this.originalColor = [...this.color];
         this.lastEchoTime = Date.now();
+        this.transitionStartTime = Date.now();
     }
 
     recordCycleEvent(colorIndex, cycleId) {
-        const timestamp = Date.now(); // Use numeric timestamp for easier calculations
+        const timestamp = Date.now();
         const event = {
             timestamp: timestamp,
             colorIndex: colorIndex,
@@ -83,25 +90,49 @@ class Hexagon {
         setTimeout(startEcho, CURRENT_ECHO_PERIOD);
     }
 
-    triggerEcho(colorIndex, intensity) {
-        // Only trigger echo if not already in a more intense state
-        if (!this.isDecaying || this.intensity < intensity) {
-            this.color = [...COLOR_PALETTE[colorIndex]];
-            this.intensity = intensity;
-            this.isDecaying = true;
-            this.lastEchoTime = Date.now();
+    triggerEcho(colorIndex, targetIntensity) {
+        // Start a smooth transition to the echo
+        this.color = [...COLOR_PALETTE[colorIndex]];
+        this.targetIntensity = targetIntensity;
+        this.transitionStartTime = Date.now();
+        this.isTransitioning = true;
+        this.isDecaying = true;
+        this.lastEchoTime = Date.now();
+    }
+
+    updateTransition() {
+        if (this.isTransitioning) {
+            const elapsed = Date.now() - this.transitionStartTime;
+            const progress = Math.min(1, elapsed / this.ECHO_TRANSITION_DURATION);
+            
+            // Smooth easing function (ease-in-out)
+            const easedProgress = progress < 0.5
+                ? 2 * progress * progress
+                : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+            
+            // Calculate current intensity based on transition progress
+            const startIntensity = this.intensity;
+            this.intensity = startIntensity + (this.targetIntensity - startIntensity) * easedProgress;
+            
+            // End transition when complete
+            if (progress >= 1) {
+                this.isTransitioning = false;
+            }
         }
     }
 
     updateDecay() {
-        if (this.isDecaying) {
+        // First update any ongoing transition
+        this.updateTransition();
+
+        if (this.isDecaying && !this.isTransitioning) {
             let stillDecaying = false;
             
             // Calculate time since last echo
             const timeSinceEcho = Date.now() - this.lastEchoTime;
             
-            // Only decay after a short delay to show the echo
-            if (timeSinceEcho > 100) {  // 100ms delay before starting decay
+            // Only decay after the transition is complete
+            if (timeSinceEcho > this.ECHO_TRANSITION_DURATION) {
                 for (let i = 0; i < 3; i++) {
                     if (this.color[i] > 0) {
                         this.color[i] = Math.max(0, this.color[i] - CURRENT_DECAY_RATE);
@@ -268,18 +299,20 @@ class Grid {
     }
 
     colorCycle() {
-        this.cycleCounter++;  // Increment counter for new cycle
+        this.cycleCounter++;
         const cycleId = this.cycleCounter;
         
         selectedHexagons.forEach(([i, j]) => {
             const hex = this.hexagons[`${i},${j}`];
-            let currentColorIndex = COLOR_PALETTE.findIndex(color => 
-                color[0] === hex.color[0] && 
-                color[1] === hex.color[1] && 
-                color[2] === hex.color[2]
-            );
+            let nextColorIndex = 0;  // Default to first color if no previous color found
             
-            const nextColorIndex = (currentColorIndex + 1) % COLOR_PALETTE.length;
+            // Search through the hexagon's event history to find its last color
+            if (hex.eventHistory.length > 0) {
+                const lastEvent = hex.eventHistory[hex.eventHistory.length - 1];
+                nextColorIndex = (lastEvent.colorIndex + 1) % COLOR_PALETTE.length;
+            }
+            
+            // Apply the next color in sequence
             hex.color = [...COLOR_PALETTE[nextColorIndex]];
             hex.intensity = 255;
             hex.isHighlighted = false;
